@@ -1,12 +1,13 @@
-import curses
 import random
 import time
+import tkinter as tk
 from pathlib import Path
 
-WIDTH = 10
+WIDTH = 12
 HEIGHT = 20
 HIDDEN = 2
 TOTAL_HEIGHT = HEIGHT + HIDDEN
+CELL_SIZE = 20
 LOCK_DELAY = 500
 MAX_LOCK_RESETS = 15
 
@@ -21,14 +22,15 @@ SHAPES = {
 }
 
 COLORS = {
-    1: curses.COLOR_CYAN,
-    2: curses.COLOR_YELLOW,
-    3: curses.COLOR_MAGENTA,
-    4: curses.COLOR_GREEN,
-    5: curses.COLOR_RED,
-    6: curses.COLOR_BLUE,
-    7: curses.COLOR_WHITE,
+    1: "#00d7d7",
+    2: "#f4d03f",
+    3: "#c850c0",
+    4: "#52c878",
+    5: "#e74c3c",
+    6: "#4a90d9",
+    7: "#bfc9ca",
 }
+LOCKED_COLOR = "#000080"
 
 LINE_SCORES = {1: 100, 2: 300, 3: 500, 4: 800}
 HIGH_SCORE_FILE = Path.home() / ".tetris_highscore"
@@ -285,160 +287,232 @@ class Game:
             self.lock_time = 0
 
 
-def put(stdscr, y, x, text, attr=0):
-    height, width = stdscr.getmaxyx()
-    if y < 0 or y >= height or x < 0 or x >= width:
-        return
-    try:
-        stdscr.addstr(y, x, text[: width - x - 1], attr)
-    except curses.error:
-        pass
-
-
-def draw_cell(stdscr, y, x, kind, ghost=False):
-    attr = curses.A_DIM if ghost else curses.color_pair(kind)
-    put(stdscr, y, x, "[]" if ghost else "  ", attr)
-
-
-def draw_piece(stdscr, y0, x0, kind, rotation=0, ghost=False):
+def draw_piece(canvas, game_x, game_y, kind, rotation=0, ghost=False, cell_size=CELL_SIZE):
     matrix = ROTATIONS[kind][rotation]
-    for y, row in enumerate(matrix):
-        for x, char in enumerate(row):
+    for row_index, row in enumerate(matrix):
+        for column_index, char in enumerate(row):
+            if char == ".":
+                continue
+            board_x = game_x + column_index
+            board_y = game_y + row_index
+            if board_y < HIDDEN:
+                continue
+            canvas_x = 20 + board_x * cell_size
+            canvas_y = 20 + (board_y - HIDDEN) * cell_size
+            fill = "#333333" if ghost else COLORS[kind]
+            outline = COLORS[kind] if ghost else "#1b1b1b"
+            canvas.create_rectangle(
+                canvas_x,
+                canvas_y,
+                canvas_x + cell_size - 2,
+                canvas_y + cell_size - 2,
+                fill=fill,
+                outline=outline,
+                width=2,
+            )
+
+
+def draw_preview_piece(canvas, kind, offset_x, offset_y):
+    matrix = ROTATIONS[kind][0]
+    for row_index, row in enumerate(matrix):
+        for column_index, char in enumerate(row):
             if char != ".":
-                draw_cell(stdscr, y0 + y, x0 + x * 2, kind, ghost)
+                canvas.create_rectangle(
+                    offset_x + column_index * 20,
+                    offset_y + row_index * 20,
+                    offset_x + column_index * 20 + 18,
+                    offset_y + row_index * 20 + 18,
+                    fill=LOCKED_COLOR,
+                    outline="#1b1b1b",
+                )
 
 
-def draw(stdscr, game, paused):
-    stdscr.erase()
-    height, width = stdscr.getmaxyx()
-    if height < 25 or width < 58:
-        put(stdscr, height // 2, 1, "Terminal too small: need at least 58x25", curses.A_BOLD)
-        return
+def main():
+    root = tk.Tk()
+    root.title("Tetris")
+    root.resizable(False, False)
 
-    bx, by = 2, 2
-    put(stdscr, by, bx + 6, "TETRIS", curses.A_BOLD)
-    for row in range(HEIGHT + 2):
-        put(stdscr, by + 1 + row, bx, "|" + " " * (WIDTH * 2 + 2) + "|")
-    put(stdscr, by + 1, bx + 1, "_" * (WIDTH * 2 + 2))
-    put(stdscr, by + HEIGHT + 2, bx + 1, "-" * (WIDTH * 2 + 2))
+    canvas = tk.Canvas(
+        root,
+        width=520,
+        height=520,
+        bg="#111111",
+        highlightthickness=0,
+    )
+    canvas.pack(side=tk.LEFT)
 
-    for y in range(HIDDEN, TOTAL_HEIGHT):
-        for x in range(WIDTH):
-            kind = game.board.grid[y][x]
-            if kind:
-                draw_cell(stdscr, by + 2 + y - HIDDEN, bx + 2 + x * 2, kind)
-
-    if game.current and not game.game_over:
-        piece = game.current
-        ghost_y = game.board.ghost_y(piece)
-        original_y = piece.y
-        piece.y = ghost_y
-        if ghost_y != original_y:
-            draw_piece(stdscr, by + 2, bx + 2, piece.kind, piece.rotation, ghost=True)
-        piece.y = original_y
-        draw_piece(stdscr, by + 2, bx + 2, piece.kind, piece.rotation)
-
-    sx = bx + WIDTH * 2 + 7
-    put(stdscr, by + 1, sx, "SCORE", curses.A_BOLD)
-    put(stdscr, by + 2, sx, str(game.score).rjust(10))
-    put(stdscr, by + 4, sx, "HIGH", curses.A_BOLD)
-    put(stdscr, by + 5, sx, str(game.high_score).rjust(10))
-    put(stdscr, by + 7, sx, "LINES", curses.A_BOLD)
-    put(stdscr, by + 8, sx, str(game.lines).rjust(10))
-    put(stdscr, by + 10, sx, "LEVEL", curses.A_BOLD)
-    put(stdscr, by + 11, sx, str(game.level).rjust(10))
-
-    put(stdscr, by + 13, sx, "HOLD", curses.A_BOLD)
-    if game.held:
-        draw_piece(stdscr, by + 14, sx, game.held)
-
-    put(stdscr, by + 18, sx, "NEXT", curses.A_BOLD)
-    for i, kind in enumerate(game.queue[:3]):
-        draw_piece(stdscr, by + 19 + i * 4, sx, kind)
-
-    controls = [
-        "Left/Right or A/D  Move",
-        "Up or X           Rotate CW",
-        "Z                 Rotate CCW",
-        "Down or S         Soft drop",
-        "Space             Hard drop",
-        "C                 Hold",
-        "P                 Pause",
-        "R                 Restart",
-        "Q                 Quit",
-    ]
-    for i, line in enumerate(controls):
-        put(stdscr, by + 2 + i, sx + 16, line)
-
-    if paused:
-        put(stdscr, by + HEIGHT // 2, bx + 6, "PAUSED", curses.A_BOLD | curses.A_REVERSE)
-    if game.game_over:
-        put(stdscr, by + HEIGHT // 2 - 1, bx + 3, "GAME OVER", curses.A_BOLD | curses.A_REVERSE)
-        put(stdscr, by + HEIGHT // 2 + 1, bx + 1, "Press R to play again", curses.A_BOLD)
-
-
-def key_action(key, game, state):
-    if key in (ord("q"), ord("Q")):
-        state["quit"] = True
-        return
-    if key in (ord("r"), ord("R")):
-        state["game"] = Game(max(game.high_score, game.score))
-        return
-    if key in (ord("p"), ord("P"), 27):
-        state["paused"] = not state["paused"]
-        return
-    if state["paused"] or game.game_over:
-        return
-    if key == curses.KEY_LEFT or key in (ord("a"), ord("A")):
-        game.move(-1)
-    elif key == curses.KEY_RIGHT or key in (ord("d"), ord("D")):
-        game.move(1)
-    elif key in (curses.KEY_UP, ord("x"), ord("X")):
-        game.rotate(1)
-    elif key in (ord("z"), ord("Z")):
-        game.rotate(-1)
-    elif key == curses.KEY_DOWN or key in (ord("s"), ord("S")):
-        game.soft_drop()
-    elif key == ord(" "):
-        game.hard_drop()
-    elif key in (ord("c"), ord("C")):
-        game.hold()
-
-
-def main(stdscr):
-    curses.curs_set(0)
-    stdscr.nodelay(True)
-    if curses.has_colors():
-        curses.start_color()
-        for kind, color in COLORS.items():
-            curses.init_pair(kind, color, curses.COLOR_BLACK)
+    side = tk.Canvas(
+        root,
+        width=180,
+        height=520,
+        bg="#222222",
+        highlightthickness=0,
+    )
+    side.pack(side=tk.LEFT)
 
     high_score = load_high_score()
     state = {"game": Game(high_score), "paused": False, "quit": False}
+
+    def restart():
+        game = state["game"]
+        state["game"] = Game(max(game.high_score, game.score))
+
+    def key_action(event):
+        game = state["game"]
+        key = event.keysym.lower()
+        char = event.char.lower()
+
+        if key == "q" or char == "q":
+            state["quit"] = True
+            root.destroy()
+            return
+        if key == "r" or char == "r":
+            restart()
+            return
+        if key == "p" or key == "escape" or char == "p":
+            state["paused"] = not state["paused"]
+            return
+        if state["paused"] or game.game_over:
+            return
+
+        if key == "left" or char == "a":
+            game.move(-1)
+        elif key == "right" or char == "d":
+            game.move(1)
+        elif key == "up" or char == "x":
+            game.rotate(1)
+        elif char == "z":
+            game.rotate(-1)
+        elif key == "down" or char == "s":
+            game.soft_drop()
+        elif key == "space":
+            game.hard_drop()
+        elif char == "c":
+            game.hold()
+
+    root.bind("<Key>", key_action)
+
+    def draw():
+        canvas.delete("all")
+        game = state["game"]
+
+        canvas.create_rectangle(
+            20,
+            20,
+            20 + WIDTH * CELL_SIZE,
+            20 + HEIGHT * CELL_SIZE,
+            fill="#181818",
+            outline="#aaaaaa",
+            width=2,
+        )
+
+        for row in range(HEIGHT):
+            for column in range(WIDTH):
+                kind = game.board.grid[row + HIDDEN][column]
+                if kind:
+                    canvas.create_rectangle(
+                        20 + column * CELL_SIZE,
+                        20 + row * CELL_SIZE,
+                        20 + column * CELL_SIZE + CELL_SIZE - 2,
+                        20 + row * CELL_SIZE + CELL_SIZE - 2,
+                        fill=LOCKED_COLOR,
+                        outline="#1b1b1b",
+                    )
+
+        if game.current and not game.game_over:
+            piece = game.current
+            ghost_y = game.board.ghost_y(piece)
+            if ghost_y != piece.y:
+                draw_piece(
+                    canvas,
+                    piece.x,
+                    ghost_y,
+                    piece.kind,
+                    piece.rotation,
+                    ghost=True,
+                )
+            draw_piece(
+                canvas,
+                piece.x,
+                piece.y,
+                piece.kind,
+                piece.rotation,
+            )
+
+        side.delete("all")
+        side.create_text(90, 20, text="TETRIS", fill="#ffffff", font=("Arial", 18, "bold"))
+        side.create_text(90, 55, text=f"SCORE\n{game.score}", fill="#ffffff", font=("Arial", 12), justify="center")
+        side.create_text(90, 105, text=f"HIGH\n{game.high_score}", fill="#ffffff", font=("Arial", 12), justify="center")
+        side.create_text(90, 155, text=f"LINES\n{game.lines}", fill="#ffffff", font=("Arial", 12), justify="center")
+        side.create_text(90, 205, text=f"LEVEL\n{game.level}", fill="#ffffff", font=("Arial", 12), justify="center")
+        side.create_text(90, 245, text="HOLD", fill="#ffffff", font=("Arial", 12, "bold"))
+        if game.held:
+            draw_preview_piece(side, game.held, 70, 265)
+        side.create_text(90, 355, text="NEXT", fill="#ffffff", font=("Arial", 12, "bold"))
+        for index, kind in enumerate(game.queue[:3]):
+            draw_preview_piece(side, kind, 70, 375 + index * 42)
+
+        controls = [
+            "Arrows/A/D move",
+            "Up/X rotate CW",
+            "Z rotate CCW",
+            "S soft drop",
+            "Space hard drop",
+            "C hold",
+            "P pause",
+            "R restart",
+            "Q quit",
+        ]
+        for index, line in enumerate(controls):
+            side.create_text(90, 295 + index * 18, text=line, fill="#cccccc", font=("Arial", 9))
+
+        if state["paused"]:
+            canvas.create_text(
+                140,
+                250,
+                text="PAUSED",
+                fill="#ffffff",
+                font=("Arial", 24, "bold"),
+            )
+        if game.game_over:
+            canvas.create_text(
+                140,
+                230,
+                text="GAME OVER",
+                fill="#ffffff",
+                font=("Arial", 24, "bold"),
+            )
+            canvas.create_text(
+                140,
+                260,
+                text="Press R to restart",
+                fill="#ffffff",
+                font=("Arial", 12),
+            )
+
     last = time.monotonic()
-    while not state["quit"]:
+
+    def update():
+        nonlocal last
         now = time.monotonic()
         dt = min(100, (now - last) * 1000)
         last = now
-        key = stdscr.getch()
-        if key != curses.ERR:
-            key_action(key, state["game"], state)
         game = state["game"]
         if not state["paused"]:
             game.update(dt)
-        draw(stdscr, game, state["paused"])
-        stdscr.refresh()
-        time.sleep(0.016)
+        draw()
+        if not state["quit"]:
+            root.after(16, update)
 
-    high_score = max(high_score, state["game"].score)
-    save_high_score(high_score)
+    def on_close():
+        state["quit"] = True
+        save_high_score(max(state["game"].high_score, state["game"].score))
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+    update()
+    root.mainloop()
 
 
 if __name__ == "__main__":
-    try:
-        curses.wrapper(main)
-    except KeyboardInterrupt:
-        passgit remote add origin https://github.com/nashshawn7-byte/tetris.git
-git branch -M main
-git push -u origin main# tetris
-another python tetris code
+    main()
